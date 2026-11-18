@@ -42,11 +42,20 @@ import {
 import { getGroups } from '@/features/users/api'
 import { useMediaQuery } from '@/hooks'
 import { getUserGroups } from '@/lib/api'
+import { handleServerError } from '@/lib/handle-server-error'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
+import { getAllLogs, getUserLogs } from '../api'
 import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
+import type { UsageLog } from '../data/schema'
+import {
+  downloadCsv,
+  getLogCsvHeader,
+  getLogCsvRow,
+  toCsvLine,
+} from '../lib/export'
 import { buildSearchParams } from '../lib/filter'
-import { getDefaultTimeRange } from '../lib/utils'
+import { buildApiParams, getDefaultTimeRange } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
 import { CommonLogsStats } from './common-logs-stats'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
@@ -126,6 +135,38 @@ export function CommonLogsFilterBar<TData>(
   const { isAdminView: isAdmin } = useLogsViewScope()
   const { sensitiveVisible, setSensitiveVisible } = useUsageLogsContext()
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
+  const [exporting, setExporting] = useState(false)
+  const exportCsv = async () => {
+    setExporting(true)
+    try {
+      const params = buildApiParams({
+        page: 1,
+        pageSize: 100,
+        searchParams,
+        isAdmin,
+        columnFilters: props.table.getState().columnFilters,
+      })
+      params.end_timestamp = Math.min(
+        params.end_timestamp ?? Infinity,
+        Math.floor(Date.now() / 1000)
+      )
+      const lines = [toCsvLine(getLogCsvHeader(isAdmin, t))]
+      const fetchPage = isAdmin ? getAllLogs : getUserLogs
+      for (let p = 1; ; p++) {
+        const { data } = requireServerSuccess(await fetchPage({ ...params, p }))
+        if (!data) throw new Error(t('Failed to load logs'))
+        for (const log of data.items as UsageLog[]) {
+          lines.push(toCsvLine(getLogCsvRow(log, isAdmin, t)))
+        }
+        if (data.items.length < 100 || p * 100 >= data.total) break
+      }
+      downloadCsv('usage-logs.csv', lines)
+    } catch (error) {
+      handleServerError(error)
+    } finally {
+      setExporting(false)
+    }
+  }
   const { data: adminGroups } = useQuery({
     queryKey: ['groups'],
     queryFn: async () => requireServerSuccess(await getGroups()),
@@ -487,7 +528,19 @@ export function CommonLogsFilterBar<TData>(
       table={props.table}
       compactMobile
       stats={statsBar}
-      actionStart={sensitiveToggle}
+      actionStart={
+        <>
+          {sensitiveToggle}
+          <Button
+            variant='outline'
+            size='sm'
+            disabled={exporting}
+            onClick={exportCsv}
+          >
+            {t('Download')} CSV
+          </Button>
+        </>
+      }
       primaryFilters={
         <>
           {dateRangeFilter}

@@ -1,6 +1,8 @@
 package i18n
 
 const MsgTaskPluginUnknownMetaField = "task_plugin.unknown_meta_field"
+const MsgRelaySVGAuthorRequired = "relay.svg_author_required"
+const MsgRelaySVGStreamingUnsupported = "relay.svg_streaming_unsupported"
 
 // Message keys for i18n translations
 // Use these constants instead of hardcoded strings

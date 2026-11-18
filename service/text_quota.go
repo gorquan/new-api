@@ -431,6 +431,27 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		}
 	}
 
+	var authorQuota int
+	if author := relayInfo.SVGAuthor; author != nil && author.Usage != nil {
+		u := author.Usage
+		tokens := &dto.Usage{PromptTokens: int(*u.InputTokens), CompletionTokens: int(*u.OutputTokens)}
+		// Reasoning tokens are a subset of the reported output, not another charge.
+		if ok, quota, _ := TryTieredSettle(author.Pricing, BuildTieredTokenParams(tokens, false, nil)); ok {
+			authorQuota = quota
+		} else {
+			authorQuota = calculateTextQuotaSummary(ctx, author.Pricing, tokens).Quota
+		}
+		if authorQuota < 0 {
+			logger.LogWarn(ctx, "negative SVG author charge; retaining the author reservation")
+			authorQuota = author.Pricing.PriceData.QuotaToPreConsume
+		}
+		noteQuotaClamp(relayInfo, author.Pricing.QuotaClamp)
+		total, clamp := common.QuotaFromFloatChecked(float64(summary.Quota) + float64(authorQuota))
+		noteQuotaClamp(relayInfo, clamp)
+		summary.Quota = total
+		extraContent = append(extraContent, fmt.Sprintf("SVG: %s, %d input tokens, %d output tokens, cost %s",
+			author.Pricing.OriginModelName, *u.InputTokens, *u.OutputTokens, logger.FormatQuota(authorQuota)))
+	}
 	for _, item := range summary.ToolSurchargeItems {
 		q := decimal.NewFromFloat(item.Price).
 			Mul(decimal.NewFromInt(int64(item.Count))).
@@ -486,6 +507,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
+	if author := relayInfo.SVGAuthor; author != nil {
+		other.SetPublic("svg_author", map[string]any{"billing_model": author.Pricing.OriginModelName, "usage": author.Usage, "quota": authorQuota})
+	}
 	if adminRejectReason != "" {
 		other.SetAdmin("reject_reason", adminRejectReason)
 	}
